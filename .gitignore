@@ -1,0 +1,7 @@
+__pycache__
+*.pyc
+.trae/
+.venv/
+临时文件/
+rb.bat
+minecraft/
