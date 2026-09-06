@@ -34,6 +34,17 @@ src/core/bot.py          # Bot 门面：发送 API、生命周期
 src/plugins/             # 功能插件，一个文件一个功能
 ```
 
+## 内置插件
+
+| 插件 | 功能 |
+|---|---|
+| `hello` | 示例模板：`!hello` 指令 → 机器人回复 |
+| `console_echo` | 把关键事件回显到控制台（纯展示，注释掉注册即关闭） |
+| `state_tracker` | 把事件回填到 `bot.state`（位置/血量/世界的唯一写者） |
+| `auto_respawn` | 死亡后自动重生 |
+| `handle_request` | 自动承接其他玩家的 tpa 传送请求（中英文版均支持） |
+| `home_schedule` | 按时间表自动 `/home` 到对应家园点 |
+
 ---
 
 ## 指南：注册新的事件-响应功能
@@ -151,3 +162,11 @@ def _date(self, ctx) -> None:
 3. 插件抛出的异常会被 EventBus 隔离（打印 traceback，不断线），但请尽量自己
    处理可预期的错误。
 4. 状态用 `bot.state` 读快照即可，它是网络线程单写、无锁安全的。
+
+## 许可证
+
+本项目采用 [CC BY-NC 4.0（署名-非商业性使用 4.0 国际）](https://creativecommons.org/licenses/by-nc/4.0/) 协议开源：
+
+- ✅ 可自由复制、分发、修改、二次开发，需**署名**（注明原作者与本仓库链接）
+- ❌ **不得用于商业目的**（非商业性使用）
+- 详细条款见 [LICENSE](file:///d:/python/mc_bot_5/LICENSE)
