@@ -12,10 +12,11 @@
 ```bat
 pip install pycraft-minecraft
 set ADDRESS=localhost
-set USERNAME=your_account_email@mail.com
+set PLAYERNAME=your_account_email@mail.com
 python.exe main.py
 ```
 
+注意，当`PLAYERNAME`为邮箱地址（字段中包含`@`）时，自动使用正版登录，否则使用离线登录。
 使用`pip install pycraft-minecraft`安装库后，可用`minecraft`进行调用。
 首次运行会打印设备码授权链接，浏览器打开并输入验证码；之后复用缓存令牌。
 游戏内其他玩家发 `!hello` 机器人会回复；`!help` 列出全部指令。Ctrl+C 优雅退出。
