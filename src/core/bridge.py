@@ -7,7 +7,8 @@
 聊天发言人提取策略（从包字段提取，不做字符串正则）：
 - PlayerChatPacket(1.19.1+)：sender_uuid + sender_name(759) / network_name(760+，765+ 为 NBT)；
   内容取 plain_message(761+) / signed_content(759) / unsigned_content(全部)。
-- SystemChatPacket / ProfilelessChatPacket：协议上没有发言人字段，sender 恒为 None。
+- SystemChatPacket：协议上没有发言人字段，sender 恒为 None；
+  ProfilelessChatPacket（伪装聊天）自带 name 字段，从其中提取发言人。
 - ChatMessagePacket(<1.19)：json_data 的 "with" 数组按结构取 [发言人, 内容]。
 
 映射表的值可以是单个事件工厂，也可以是工厂元组（同一包派生多个事件，
@@ -91,8 +92,15 @@ def _make_system_chat(packet) -> ChatMessage:
 
 
 def _make_profileless_chat(packet) -> ChatMessage:
-    """ProfilelessChatPacket（1.19.3+）：无档案聊天，无发言人。"""
-    return ChatMessage(text=component_text(packet.message), source="profileless")
+    """ProfilelessChatPacket（1.19.3+，现名 DisguisedChatPacket 伪装聊天）：
+    发言人是协议自带的 name 字段（765+ 为 NBT 组件），不能丢弃。"""
+    raw_name = getattr(packet, "name", None)
+    sender = component_text(raw_name) if raw_name is not None else None
+    return ChatMessage(
+        text=component_text(packet.message),
+        sender=sender,
+        source="profileless",
+    )
 
 
 def _make_legacy_chat(packet) -> ChatMessage:

@@ -3,6 +3,7 @@ Microsoft 设备码流程认证，产出一个尚未 connect() 的 Connection。
 
 首次运行会阻塞等待浏览器授权，属预期行为；之后复用缓存令牌。
 """
+
 import sys
 
 from minecraft import authentication
@@ -18,10 +19,14 @@ def on_device_code(data: dict) -> None:
 
 def create_connection() -> Connection:
     """完成认证并创建连接对象。不负责 connect()，那是 Bot.run 的职责。"""
+    # 如果不是邮箱，则使用离线登录
+    username = config.USERNAME
+    if "@" not in username:
+        return Connection(address=config.ADDRESS, port=config.PORT, username=username)
     auth_token = authentication.MicrosoftAuthenticationToken()
     try:
         auth_token.authenticate(
-            config.USERNAME, cache_dir=config.CACHE_DIR, on_device_code=on_device_code
+            username, cache_dir=config.CACHE_DIR, on_device_code=on_device_code
         )
     except YggdrasilError as error:
         print(error)

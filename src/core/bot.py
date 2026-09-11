@@ -9,6 +9,7 @@ Bot 门面：全项目的组装点与生命周期枢纽。
 - 只有主线程允许调 stop()（内含 disconnect）；回调里只允许 request_stop()；
 - write_packet 在 connect() 之后才合法，所有发送方法都带 connected 检查。
 """
+import signal
 import threading
 import traceback
 
@@ -35,6 +36,8 @@ class Bot:
 
         # 包监听器必须早于 connect() 挂上，否则漏收 JoinGame 等早期包。
         PacketBridge(self.connection, self.events).attach()
+
+        # 命令注册
         self.commands = CommandRegistry(self)
         self.commands.start()
         # 被踢（DisconnectPacket）时 pyCraft 走正常断开流程、不抛异常，
@@ -50,6 +53,7 @@ class Bot:
 
     def run(self) -> None:
         """启动机器人：插件就绪 → 连接 → 主线程阻塞等待停止信号。"""
+        self._register_signal_handlers()
         self.plugins.setup_all()
         try:
             self.connection.connect()
@@ -85,9 +89,29 @@ class Bot:
         """回调/插件内唯一合法的停止方式：只置停止标志，主线程自然收尾。"""
         self._stop_event.set()
 
+    def _register_signal_handlers(self) -> None:
+        """把外部终止信号接入 request_stop：SIGTERM（kill / docker stop）
+        与 SIGBREAK（Windows 关控制台 / Ctrl+Break）也会走 stop() 的完整收尾
+        （disconnect + 插件 teardown），而不是被系统直接杀掉、跳过一切清理。
+        Ctrl+C（SIGINT）保持默认 KeyboardInterrupt 路径不变。
+        signal.signal 只能在主线程注册，run() 恰在主线程执行。"""
+        def _handler(signum, _frame) -> None:
+            print(f"[bot] 收到信号 {signum}，准备退出")
+            self.request_stop()
+
+        for name in ("SIGTERM", "SIGBREAK"):
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue  # 当前平台没有该信号（如 Linux 无 SIGBREAK）
+            try:
+                signal.signal(sig, _handler)
+            except (ValueError, OSError):
+                print(f"[bot] 注册 {name} 失败，该信号将走系统默认行为")
+
     def _on_network_error(self, exc, exc_info) -> None:
         print("[bot] 网络线程异常:")
-        traceback.print_exception(type(exc), exc, exc_info)
+        print(exc)
+        # traceback.print_exception(type(exc), exc, exc_info)
         self.state.connected = False
         self.request_stop()
 
