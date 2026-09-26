@@ -7,10 +7,13 @@ bridge 把协议包翻译成这里定义的事件，经 EventBus 同步分发给
 - 回调里禁止 sleep / 重活，否则收发包卡死被服务器踢；
 - 单线程同步分发，无需任何锁。
 """
-import traceback
 from dataclasses import dataclass, field
 from typing import Callable
 from uuid import UUID
+
+from src.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class EventBus:
@@ -42,8 +45,7 @@ class EventBus:
             try:
                 handler(event)
             except Exception:
-                print("[events] 事件处理函数出错:")
-                traceback.print_exc()
+                logger.error("事件处理函数出错", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

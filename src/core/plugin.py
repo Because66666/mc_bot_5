@@ -11,12 +11,15 @@
 """
 from __future__ import annotations
 
-import traceback
 from typing import Callable, TYPE_CHECKING
+
+from src.core.logger import get_logger
 
 if TYPE_CHECKING:
     # 仅类型检查用，运行时不导入——否则与 src.core.bot 循环引用。
     from src.core.bot import Bot
+
+logger = get_logger(__name__)
 
 
 class Plugin:
@@ -66,8 +69,7 @@ class PluginManager:
             try:
                 plugin.setup()
             except Exception:
-                print(f"[plugins] {plugin.name} setup 失败:")
-                traceback.print_exc()
+                logger.error("%s setup 失败", plugin.name, exc_info=True)
 
     def teardown_all(self) -> None:
         """按注册的逆序注销全部插件。"""
@@ -75,6 +77,5 @@ class PluginManager:
             try:
                 plugin._unbind()
             except Exception:
-                print(f"[plugins] {plugin.name} teardown 异常:")
-                traceback.print_exc()
+                logger.error("%s teardown 异常", plugin.name, exc_info=True)
         self._plugins.clear()

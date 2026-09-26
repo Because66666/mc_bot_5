@@ -4,6 +4,9 @@
 声明式映射表 _PACKET_EVENT_MAP：想处理新包，加一行映射即可；
 个别特殊需求也可以在插件里直接用 connection.listener(...)（逃生舱口）。
 
+另外，每个包到达都会刷新 PacketBridge.last_packet_at（含不产生事件的
+KeepAlivePacket），这是 bot 判断"连接是活着还是已成僵尸"的唯一依据。
+
 聊天发言人提取策略（从包字段提取，不做字符串正则）：
 - PlayerChatPacket(1.19.1+)：sender_uuid + sender_name(759) / network_name(760+，765+ 为 NBT)；
   内容取 plain_message(761+) / signed_content(759) / unsigned_content(全部)。
@@ -17,6 +20,7 @@ attach() 时自动实例化（每个桥一份状态）。
 """
 
 import json
+import time
 
 from minecraft.networking.connection import Connection
 from minecraft.networking.packets import clientbound
@@ -184,6 +188,16 @@ def _make_kicked(packet) -> Kicked:
     return Kicked(reason=component_text(json_str), raw_json=json_str)
 
 
+def _make_keep_alive(packet) -> None:
+    """KeepAlivePacket：服务器约每 15–20 秒发一次（pyCraft 会自动回包）。
+
+    这里刻意不产生业务事件（返回 None），只为让"包到达时间戳"被
+    PacketBridge 刷新——bot 的假死看门狗靠"最近一次收到任意包"判断连接
+    是否还活着。FRP 隧道半开时该包停止到达，这是客户端唯一可观测的掉线信号。
+    """
+    return None
+
+
 # 声明式映射表：包类型 → 事件工厂。加事件只改这一处。
 _PACKET_EVENT_MAP = {
     play.JoinGamePacket: _make_joined_game,
@@ -191,6 +205,8 @@ _PACKET_EVENT_MAP = {
     play.PlayerPositionAndLookPacket: _make_position_updated,
     play.UpdateHealthPacket: (_make_health_updated, _DeathDetector),
     play.DisconnectPacket: _make_kicked,
+    # 心跳包不产生事件，只用来刷新存活时间戳（见 _make_keep_alive）。
+    play.KeepAlivePacket: _make_keep_alive,
     play.ChatMessagePacket: _make_legacy_chat,
     play.PlayerChatPacket: _make_player_chat,
     play.SystemChatPacket: _make_system_chat,
@@ -199,11 +215,18 @@ _PACKET_EVENT_MAP = {
 
 
 class PacketBridge:
-    """把映射表挂到 Connection 上：包到达 → 工厂翻译 → 总线分发。"""
+    """把映射表挂到 Connection 上：包到达 → 工厂翻译 → 总线分发。
+
+    last_packet_at 记录最近一次收到任意已监听包的时刻（time.monotonic），
+    由网络线程单写、其他线程只读（CPython 下 float 赋值原子），
+    供 bot 的假死看门狗判断连接里是否还有数据流入。
+    """
 
     def __init__(self, connection: Connection, bus: EventBus) -> None:
         self.connection = connection
         self.bus = bus
+        #: 最近一次收到包的时刻（time.monotonic）；None = 还没收到过任何包
+        self.last_packet_at: float | None = None
 
     def attach(self) -> None:
         """注册所有监听器。必须在 connect() 之前调用，否则漏收 JoinGame 等早期包。"""
@@ -219,6 +242,8 @@ class PacketBridge:
     def _register(self, packet_type, factory) -> None:
         @self.connection.listener(packet_type)
         def on_packet(packet):
+            # 任何已监听包到达都刷新存活时间戳（含不产生事件的心跳包）。
+            self.last_packet_at = time.monotonic()
             event = factory(packet)
             if event is not None:
                 self.bus.emit(event)

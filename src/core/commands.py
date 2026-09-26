@@ -8,12 +8,14 @@
 sender 来自包字段：玩家发言必有，系统消息为 None（协议无此字段），
 handler 自行决定如何使用。自己发言的回显按 sender 名字过滤，防止自触发循环。
 """
-import traceback
 from dataclasses import dataclass, field
 from typing import Callable
 
 import config
 from src.core.events import ChatMessage
+from src.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -80,8 +82,7 @@ class CommandRegistry:
         try:
             handler(CommandContext(bot=self.bot, sender=event.sender, args=args))
         except Exception:
-            print(f"[commands] 指令 {self.prefix}{name} 执行出错:")
-            traceback.print_exc()
+            logger.error("指令 %s%s 执行出错", self.prefix, name, exc_info=True)
             self.bot.chat(f"指令 {self.prefix}{name} 执行出错")
 
     def _help_cmd(self, ctx: CommandContext) -> None:
