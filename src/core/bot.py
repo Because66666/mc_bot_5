@@ -24,9 +24,11 @@ import signal
 import threading
 import time
 
+from minecraft.exceptions import LoginDisconnect
 from minecraft.networking.packets import serverbound
 
 import config
+from src.core import compat
 from src.core.auth import create_connection
 from src.core.bridge import PacketBridge
 from src.core.commands import CommandRegistry
@@ -63,6 +65,11 @@ class Bot:
         # bridge 同时维护"最近一次收到包"的时间戳，供下面的看门狗使用。
         self.bridge = PacketBridge(self.connection, self.events)
         self.bridge.attach()
+        # 资源包观测层：应答由 pyCraft 内置 reactor 完成，本模块只记录日志。
+        # 服务器在 configuration 阶段下发资源包后必须收到应答，否则永远收不到
+        # FinishConfiguration（表现为"登录成功却收不到 JoinGame"）。pyCraft 低于
+        # 0.7.4 没有这个能力，install() 会直接抛错终止启动。详见 compat 模块注释。
+        compat.install(self.connection)
 
         # 命令注册
         self.commands = CommandRegistry(self)
@@ -76,6 +83,9 @@ class Bot:
 
         self.plugins = PluginManager(self)
         self._stop_event = threading.Event()
+        # 是否正在主动关闭连接：主动关闭会让读 socket 的网络线程抛异常，
+        # 那种异常是正常噪音，不能记成 ERROR（否则真故障会被噪音淹没）。
+        self._closing = False
         # 网络线程崩溃兜底（服务器崩/被踢/漏网异常）：打印并走正常退出流程。
         self.connection.handle_exception = self._on_network_error
         # 网络线程"无异常地"结束（连接被对端关闭、socket 静默失效）时也必须唤醒
@@ -103,13 +113,7 @@ class Bot:
 
         self._start_watchdog()
         try:
-            if not self._joined.wait(self.LOGIN_TIMEOUT):
-                logger.error(
-                    "登录超时：%.0f 秒内没收到 JoinGame（连接半开或服务器无响应），"
-                    "退出进程等待 supervisor 重连",
-                    self.LOGIN_TIMEOUT,
-                )
-                self._force_exit_later()
+            if not self._wait_for_login():
                 return
             logger.info("已进入游戏，按 Ctrl+C 退出")
             while not self._stop_event.wait(0.5):
@@ -118,6 +122,28 @@ class Bot:
             logger.info("收到 Ctrl+C，准备退出")
         finally:
             self.stop()
+
+    def _wait_for_login(self) -> bool:
+        """等登录完成；网络线程先失败/被踢时立刻返回 False。
+
+        不能只写 _joined.wait(LOGIN_TIMEOUT)：网络线程可能 1 秒内就失败了
+        （登录被服务器拒绝、连接被对端关闭），而主线程若只等 _joined，就要
+        空等满 LOGIN_TIMEOUT，还会把已经记录下来的真实原因盖在"登录超时"后面。
+        """
+        deadline = time.monotonic() + self.LOGIN_TIMEOUT
+        while not self._joined.is_set():
+            if self._stop_event.wait(0.5):
+                logger.error("连接在登录完成前终止，退出进程（真实原因见上一条日志）")
+                return False
+            if time.monotonic() >= deadline:
+                logger.error(
+                    "登录超时：%.0f 秒内没收到 JoinGame（连接半开或服务器无响应），"
+                    "退出进程等待 supervisor 重连",
+                    self.LOGIN_TIMEOUT,
+                )
+                self._force_exit_later()
+                return False
+        return True
 
     def stop(self) -> None:
         """只在主线程调用：断开连接并逆序注销全部插件（可重复调用）。"""
@@ -132,6 +158,7 @@ class Bot:
 
         immediate=True 不再 flush 待发队列——连接已经判定异常时往里写包没有意义。
         """
+        self._closing = True  # 让 _on_network_error 区分"主动关闭"与真故障
         self.state.connected = False
         try:
             self.connection.disconnect(immediate=True)
@@ -162,8 +189,23 @@ class Bot:
                 logger.warning("注册信号 %s 失败，该信号将走系统默认行为", name)
 
     def _on_network_error(self, exc, exc_info) -> None:
-        # exc_info 是 pyCraft 传入的 sys.exc_info() 三元组，直接交给 logging 打栈
-        logger.error("网络线程异常: %s", exc, exc_info=exc_info)
+        if self._closing or self._stop_event.is_set():
+            # 主动收尾时网络线程正在读 socket，会抛 "I/O operation on closed file"。
+            # 这是正常噪音：降到 INFO，别把它记成故障（真故障才用 ERROR + 调用栈）。
+            logger.info("连接关闭过程中网络线程退出：%s", exc)
+            self.state.connected = False
+            return
+        if isinstance(exc, LoginDisconnect):
+            # 服务器主动拒绝登录：属于业务结果而非程序缺陷，不打调用栈。
+            logger.error(
+                "服务器拒绝登录：%s。请检查：① 该服务器是否要求正版验证（本机当前"
+                "认证方式见上面 auth 日志）；② 账号是否在白名单；③ 换一个入口 IP 重试"
+                "（同一域名可能有多个 A 记录，其中某台可能不响应）",
+                exc,
+            )
+        else:
+            # exc_info 是 pyCraft 传入的 sys.exc_info() 三元组，直接交给 logging 打栈
+            logger.error("网络线程异常: %s", exc, exc_info=exc_info)
         self.state.connected = False
         self.request_stop()
 
